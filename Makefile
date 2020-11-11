@@ -1,2 +1,2 @@
 compile:
-	gcc -pthread -g -o main lab.c
+	gcc -lrt -pthread -g -o main lab.c
