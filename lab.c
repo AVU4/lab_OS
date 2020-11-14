@@ -9,6 +9,7 @@
 #define D 78
 #define E 72
 #define G 10
+#define I 35
 
 
 const int filenumbers = A/ E + (A % E == 0 ? 0: 1);
@@ -28,8 +29,11 @@ typedef struct {
 typedef struct {
 	char* address;
 	int filenumber;
-//	sem_t* sems;
 }writer_thread_info;
+
+typedef struct {
+	int number_thread;
+}reader_thread_info;
 
 
 char* allocate(){
@@ -40,7 +44,7 @@ char* allocate(){
 			0);
 }
 
-void* write(void* data){
+void* write_memory(void* data){
 
 	thread_info* cur_data = (thread_info*) data;
 	char* block = malloc(cur_data->size * sizeof(char));
@@ -72,7 +76,7 @@ void fill_space(char* address){
 
 
 	for (int i = 0; i < D; i ++) 
-		pthread_create(&threads[i], NULL, write, &informations[i]);
+		pthread_create(&threads[i], NULL, write_memory, &informations[i]);
 
 	for (int i = 0; i < D; i ++) 
 		pthread_join(threads[i], NULL);
@@ -103,12 +107,12 @@ void write_file(writer_thread_info* data, int idFile){
 	sem_wait(cur_sem);
 	char* defaultname = malloc(sizeof(char) * 6);
 	snprintf(defaultname, sizeof(defaultname) + 1, "labOS%d",++idFile);
-	FILE* file = fopen(defaultname, "w+b");
-	unsigned int file_size = E * 1024 * 1024;
+	FILE* file = fopen(defaultname, "wb");
+	size_t file_size = E * 1024 * 1024;
 	size_t rest = 0;
 	while (rest < file_size) {
-		long size = file_size - rest >= D ? D : file_size - rest;
-	        rest += fwrite(data->address + rest, 1,size, file);	
+		long size = file_size - rest >= G ? G : file_size - rest;
+		rest += fwrite(data->address + rest, 1, size, file);	
 	}
 
 	sem_post(cur_sem);
@@ -117,9 +121,64 @@ void write_file(writer_thread_info* data, int idFile){
 void* write_files(void* data){
 	writer_thread_info* cur_data = (writer_thread_info*) data;
         while (loop == 1){	
-		for (int i = 0; i < cur_data->filenumber; i ++){
-			write_file(cur_data, i);
+		write_file(cur_data, cur_data->filenumber);
 			
+	}
+}
+
+
+void read_file(int id_thread, int idFile){
+	sem_t* cur_sem = get_sem(idFile);
+	sem_wait(cur_sem);
+
+
+	char* defaultname = malloc(sizeof(char) * 6);
+	snprintf(defaultname, sizeof(defaultname) + 1, "labOS%d",++idFile);
+	FILE* file = fopen(defaultname, "rb");
+
+	unsigned char block[G];
+	
+	fread(&block, 1 , G, file);
+	
+	int min = 0;
+	int flag = 1;
+	
+	size_t parts = E * 1024 * 1024 / G;
+
+	for (size_t part = 0; part < parts; part ++){
+		int min_from_block = 0;
+		int flag_for_block = 1;
+		for (size_t i = 0; i < sizeof(block); i += 4){
+			unsigned int num = 0;
+		
+			for (int j = 0; j < 4; j ++) {
+				num = (num<<8) + block[i + j];
+			}
+			if (flag_for_block == 1){
+				flag_for_block = 0;
+				min_from_block = num;
+			}else{
+				if (min_from_block > num) min_from_block = num;
+			}
+		}
+		if (flag == 1) {
+			flag = 0;
+			min = min_from_block;
+		}else{
+			if (min > min_from_block) min = min_from_block;
+		}
+	}
+	fprintf(stdout,"\nMin from labOS%d from thread-%d is %d\n",idFile, id_thread, min );
+	fflush(stdout);
+	fclose(file);
+	sem_post(cur_sem);
+}
+
+void* read_files(void* data){
+	reader_thread_info* cur_data = (reader_thread_info*) data;
+	while (loop) {
+		for (int i = 0; i < filenumbers; i ++){
+			read_file(cur_data->number_thread, i);
 		}
 	}
 }
@@ -155,21 +214,42 @@ int main(void){
 	sem_init(&sem2, 0, 1);
 	sem_init(&sem3, 0, 1);
 	
-	pthread_t writer_thread;
-	writer_thread_info writer_information;
+	pthread_t writer_thread[filenumbers];
+	writer_thread_info writer_information[filenumbers];
 
-	writer_information.filenumber = filenumbers;
-	writer_information.address = address;
+	for (int  i = 0; i < filenumbers; i++) {
+		writer_information[i].filenumber = i;
+		writer_information[i].address = address;
+	}
+
+	for (int i = 0; i < filenumbers; i ++)
+		pthread_create(&writer_thread[i], NULL, write_files, &writer_information[i]);
+
+	pthread_t reader_thread[I];
+	reader_thread_info reader_information[I];
+
+	for (int i = 0; i < I; i++){
+		reader_information[i].number_thread = i + 1;
+		pthread_create(&reader_thread[i], NULL, read_files, &reader_information[i]);
+	}
 
 
-	pthread_create(&writer_thread, NULL, write_files, &writer_information);
 
 	printf("Pause");
 	getchar();
 
+	printf("End");
+	getchar();
+
 	loop = 0;
 
-	pthread_join(writer_thread, NULL);
+	for (int i = 0; i < I; i ++){
+		pthread_join(reader_thread[i], NULL);
+	}
+
+	for (int i = 0; i < filenumbers; i ++)
+		pthread_join(writer_thread[i], NULL);
+	
 	pthread_join(generate_thread, NULL);
 
 	sem_destroy(&sem1);
